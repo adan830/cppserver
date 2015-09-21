@@ -1,0 +1,111 @@
+#include "network.h"
+#include "besim.h"
+
+using namespace std;
+
+extern PFdProcess gFdProcess[MAX_FD];
+extern map<pthread_t, int> cpu_map;
+extern int besim_fds[MAX_CPU];
+
+char senddata[MAX_CPU][BUF_LEN], readbuf[MAX_CPU][BUF_LEN];
+int presend = 500;
+
+struct epoll_event ev;
+
+
+int client_readfun(int epoll, int fd, timer_link* timer) {
+    //char readbuf[1024];
+    int cpu_id = cpu_map[pthread_self()];
+	int received = 0;
+    while (true) {
+        int len = read(fd, &(readbuf[cpu_id][0])+received, BUF_LEN);
+        if (len == -1) {
+            readbuf[cpu_id][0] = 0;
+            break;
+
+        } else if (len == 0) {
+            readbuf[cpu_id][len] = 0;
+            gFdProcess[fd]->m_activeclose = true;
+//Log << "read end, len=0" << std::endl;
+            return -1;
+        }
+        if (len > 0) {
+//            Log << "'" << readbuf << "'" << std::endl;
+			received += len;
+			readbuf[cpu_id][received] = 0;
+            client_writefun(epoll, fd, timer);
+/*
+ev.data.fd = fd;
+ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+if (epoll_ctl(epoll, EPOLL_CTL_MOD, fd, &ev) == -1)
+	perror("epoll_ctl: mod");  */
+        }
+    }
+    return 1;
+}
+
+//int times=0;
+
+
+int client_writefun(int epoll, int fd, timer_link* timer) {
+
+	//与besim通信的socket_fd
+	int cpu_id, besim_socket_fd;
+	cpu_id = cpu_map[pthread_self()];
+	besim_socket_fd = besim_fds[cpu_id];
+//printf("%s\n", readbuf[cpu_id]);
+	//与besim通信...
+	process_besim(besim_socket_fd, cpu_id);
+
+	presend = strlen(senddata[cpu_id]);
+    int len = presend - gFdProcess[fd]->m_sended;
+  //  cout<<senddata[cpu_id]<<endl;
+  /*  ofstream out("/home/CHH/finalserver/output.txt");
+    if (out.is_open())   
+    {  
+         out<<senddata[cpu_id]<<endl;    
+         out.close();  
+    } */ 
+    len = write(fd, &(senddata[cpu_id][0]) + gFdProcess[fd]->m_sended, len);
+    if (len == 0) {
+        gFdProcess[fd]->m_activeclose = true;
+    } else if (len > 0) {
+        gFdProcess[fd]->m_sended += len;
+        if (gFdProcess[fd]->m_sended == presend) {
+            gFdProcess[fd]->m_sended = 0;
+        }
+    }
+    return 1;
+}
+
+
+
+int client_closefun(int epoll, int fd, timer_link* timer) {
+    timer->remote_timer(gFdProcess[fd]);
+
+    gFdProcess[fd]->init();
+//加两句，删除要关闭的fd在epoll上的事件
+struct epoll_event ev;
+epoll_ctl(epoll, EPOLL_CTL_DEL, fd, &ev);
+
+    ::close(fd);
+    return 1;
+}
+
+
+
+int client_timeoutfun(int epoll, int fd, timer_link* timers, time_value tnow) {
+
+/*    int len = presend - gFdProcess[fd]->m_sended;
+    len = write(fd, &(senddata[0]) + gFdProcess[fd]->m_sended, len);
+    if (len == 0) {
+        gFdProcess[fd]->m_activeclose = true;
+    } else if (len > 0) {
+        gFdProcess[fd]->m_sended += len;
+        if (gFdProcess[fd]->m_sended == presend) {
+            gFdProcess[fd]->m_sended = 0;
+        }
+    }
+    timers->add_timer(gFdProcess[fd], tnow + 10 * 1000);
+*/    return 0;
+}
